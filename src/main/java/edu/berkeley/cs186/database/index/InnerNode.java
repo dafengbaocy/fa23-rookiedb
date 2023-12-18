@@ -78,11 +78,23 @@ class InnerNode extends BPlusNode {
 
     // Core API ////////////////////////////////////////////////////////////////
     // See BPlusNode.get.
+
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
+        //递归深度优先,终止条件：当这玩意为叶节点
+        InnerNode a =this;
+        int i =InnerNode.numLessThanEqual(key,a.keys);
+        byte tmp = a.getChild(i).toBytes()[0];
+        if(tmp==(byte)1){
+            return (LeafNode) a.getChild(i);
+        }
+        a = (InnerNode) a.getChild(i);
+        return a.get(key);
 
-        return null;
+
+
+
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -90,16 +102,100 @@ class InnerNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
         // TODO(proj2): implement
+        InnerNode a =this;
 
-        return null;
+        if(a.getChild(0).toBytes()[0]==1){
+            return (LeafNode) a.getChild(0);
+        }
+        a = (InnerNode) a.getChild(0);
+        return a.getLeftmostLeaf();
+
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        //递归执行
+        //先找到需要插入的位置
+        InnerNode a = this;
+        int i = InnerNode.numLessThanEqual(key, a.keys);
+        byte tmp = a.getChild(i).toBytes()[0];
+        Optional<Pair<DataBox, Long>> m = Optional.empty();
+        if (tmp == (byte) 1) {
+            m =  a.getChild(i).put(key, rid);
 
-        return Optional.empty();
+        }
+        else{
+            a = (InnerNode) a.getChild(i);
+             m = a.put(key, rid);
+        }
+
+        if (!m.isPresent()) {
+            return Optional.empty();
+        } else {
+            if (2 * this.metadata.getOrder() == keys.size()) {
+                //插入keys和children
+                DataBox k = m.get().getFirst();
+                this.keys.add(i, k);
+                this.children.add(i+1,m.get().getSecond());
+                //开始拆分
+                List<DataBox> keys1 = keys.subList(0, keys.size() / 2);
+                List<Long> children1 = children.subList(0, children.size() / 2);
+                List<DataBox> keys2 = keys.subList(keys.size() / 2+1, keys.size());
+                List<Long> children2 = children.subList( children.size() / 2,children.size());
+                DataBox rr = keys.get(keys.size() / 2);
+                //修改leaf0
+                this.keys = keys1;
+                this.children = children1;
+
+                //创造leaf3,问题：全抄的这个叶节点的东西，可能会出问题
+                InnerNode l3 = new InnerNode(this.metadata, this.bufferManager, keys2,  children2, this.treeContext);
+
+                Pair<DataBox, Long> tt = new Pair<>(rr, l3.getPage().getPageNum());
+                Optional<Pair<DataBox, Long>> res = Optional.of(tt);
+                l3.sync();
+                sync();
+                return res;
+            }
+            else{
+                //插入keys和children
+                DataBox k = m.get().getFirst();
+                this.keys.add(i, k);
+                this.children.add(i+1,m.get().getSecond());
+                sync();
+                return Optional.empty();
+            }
+        }
+
+    }
+
+
+    private Optional<Pair<DataBox, Long>> insert(DataBox key, Long child) {
+        int index = InnerNode.numLessThan(key, keys);
+        keys.add(index, key);
+        children.add(index + 1, child);
+
+        if (keys.size() <= metadata.getOrder() * 2) {
+            // Case 1: If inserting the pair (k, c) does NOT cause leaf to overflow, Optional.empty() is returned.
+            sync();
+            return Optional.empty();
+        } else {
+            // Case 2: If inserting the pair (k, c) does cause the node n to overflow, a pair (split_key, right_node_page_num) is returned.
+            DataBox split_key = keys.get(metadata.getOrder());
+            List<DataBox> right_keys = keys.subList(metadata.getOrder() + 1, keys.size());
+            List<Long> right_children = children.subList(metadata.getOrder() + 1, children.size());
+
+            keys = keys.subList(0, metadata.getOrder());
+            children = children.subList(0, metadata.getOrder() + 1);
+            sync();
+
+            InnerNode new_rightSibling = new InnerNode(metadata, bufferManager, right_keys,
+                    right_children,
+                    treeContext);
+
+            return Optional.of(new Pair(split_key, new_rightSibling.getPage().getPageNum()));
+        }
     }
 
     // See BPlusNode.bulkLoad.
@@ -107,15 +203,33 @@ class InnerNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        BPlusNode rightMostChild = BPlusNode.fromBytes(metadata, bufferManager, treeContext, children.get(children.size() - 1));
+        Optional<Pair<DataBox, Long>> splitInfo = rightMostChild.bulkLoad(data, fillFactor);
+        if(!splitInfo.isPresent()){
+            return  splitInfo;
+        }
+        else{
+            // child split 对叶节点进行插入，根据提示，这个东西是不需要改变的（和put相比）
+            DataBox split_key = splitInfo.get().getFirst();
+            Long child = splitInfo.get().getSecond();
+            Optional<Pair<DataBox, Long>> mySplitInfo = insert(split_key, child);
+            if(!mySplitInfo.isPresent()){
+                //如果在这个内部节点还没有爆仓，那么我们可以接着刚刚没插入完的节点插入
+                return bulkLoad(data,fillFactor);
+            }
+            else{
+                return mySplitInfo;
+            }
+        }
 
-        return Optional.empty();
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
+        LeafNode a = get(key);
+        a.remove(key);
         return;
     }
 

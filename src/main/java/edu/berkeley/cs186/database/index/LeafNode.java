@@ -148,7 +148,10 @@ class LeafNode extends BPlusNode {
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
 
-        return null;
+//        if(InnerNode.numLessThanEqual(key,this.keys)!=InnerNode.numLessThan(key,this.keys)){
+//            return this;
+//        }
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -156,14 +159,46 @@ class LeafNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         // TODO(proj2): implement
 
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int i= InnerNode.numLessThan(key,this.keys);
 
+
+        //爆仓了
+        if(2*this.metadata.getOrder()==keys.size()){
+            this.keys.add(i,key);
+            this.rids.add(i,rid);
+            //开始拆分
+            List<DataBox> keys1 = keys.subList(0, keys.size()/2);
+            List<RecordId> rids1 = rids.subList(0, rids.size()/2);
+            List<DataBox> keys2 = keys.subList(keys.size()/2, keys.size());
+            List<RecordId> rids2 = rids.subList(rids.size()/2, rids.size());
+            //修改leaf0
+            this.keys = keys1;
+            this.rids = rids1;
+            //创造leaf3,问题：全抄的这个叶节点的东西，可能会出问题
+            LeafNode l3 = new LeafNode(this.metadata,this.bufferManager,keys2,rids2,this.rightSibling,this.treeContext);
+            this.rightSibling = Optional.of(l3.getPage().getPageNum());
+            //这里不需要修改rightsib，因为存的long值是有兄弟的pagenum，但是pagenumn是一样的
+            Pair<DataBox,Long> tmp = new Pair<>(l3.keys.get(0),l3.getPage().getPageNum());
+            Optional<Pair<DataBox, Long>> res = Optional.of(tmp);
+            l3.sync();
+            sync();
+           return res;
+
+        }
+        else{
+            //没有爆仓
+            this.keys.add(i,key);
+            this.rids.add(i,rid);
+
+            sync();
+        }
         return Optional.empty();
     }
 
@@ -172,14 +207,39 @@ class LeafNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        int max = (int)Math.ceil(fillFactor*this.metadata.getOrder()*2);
+        while(data.hasNext()&&(keys.size()<max)){
+            Pair<DataBox, RecordId> p = data.next();
+            keys.add(p.getFirst());
+            rids.add(p.getSecond());
+            }
+        // if there is more data, then split
+        Optional<Pair<DataBox, Long>> ret = Optional.empty();
+        if (data.hasNext()) {
+            List<DataBox> new_keys = new ArrayList<>();
+            List<RecordId> new_rids = new ArrayList<>();
+            Pair<DataBox, RecordId> p = data.next();
+            new_keys.add(p.getFirst());
+            new_rids.add(p.getSecond());
+            LeafNode new_rightSibling = new LeafNode(metadata, bufferManager, new_keys, new_rids, rightSibling, treeContext);
+            rightSibling = Optional.of(new_rightSibling.getPage().getPageNum());
+            ret = Optional.of(new Pair(p.getFirst(), rightSibling.get()));
+        }
+        sync();
 
-        return Optional.empty();
+        return ret;
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
+        //不需要重平衡
+        if(InnerNode.numLessThanEqual(key,keys)!=InnerNode.numLessThan(key,keys)){
+            keys.remove(InnerNode.numLessThan(key,keys));
+            rids.remove(InnerNode.numLessThan(key,keys));
+        }
+        sync();
 
         return;
     }
@@ -223,6 +283,7 @@ class LeafNode extends BPlusNode {
 
         long pageNum = rightSibling.get();
         return Optional.of(LeafNode.fromBytes(metadata, bufferManager, treeContext, pageNum));
+
     }
 
     /** Serializes this leaf to its page. */
@@ -376,8 +437,28 @@ class LeafNode extends BPlusNode {
         // Note: LeafNode has two constructors. To implement fromBytes be sure to
         // use the constructor that reuses an existing page instead of fetching a
         // brand new one.
+        //获取page页面
+        Page page = bufferManager.fetchPage(treeContext, pageNum);
+        //为读写页面内容开辟缓冲区
+        Buffer buf = page.getBuffer();
+        //获取节点类型
+        byte nodeType = buf.get();
+        assert(nodeType == (byte) 1);
 
-        return null;
+        //获取右兄弟页面id
+
+        long rs = buf.getLong();
+        Optional<Long> RightSibling = rs == -1 ? Optional.empty() : Optional.of(rs);
+
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+        int n = buf.getInt();
+        for (int i = 0; i < n; ++i) {
+            keys.add(DataBox.fromBytes(buf, metadata.getKeySchema()));
+            rids.add(RecordId.fromBytes(buf));
+        }
+
+        return new LeafNode(metadata, bufferManager, page, keys,rids, RightSibling, treeContext);
     }
 
     // Builtins ////////////////////////////////////////////////////////////////

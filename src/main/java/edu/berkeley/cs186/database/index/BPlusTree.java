@@ -146,8 +146,9 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
+        LeafNode a =  root.get(key);
 
-        return Optional.empty();
+        return a.getKey(key);
     }
 
     /**
@@ -203,7 +204,8 @@ public class BPlusTree {
 
         // TODO(proj2): Return a BPlusTreeIterator.
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(root.getLeftmostLeaf());
+
     }
 
     /**
@@ -236,9 +238,17 @@ public class BPlusTree {
 
         // TODO(proj2): Return a BPlusTreeIterator.
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(root.get(key),key);
     }
-
+    private void splitRoot(DataBox key, Long child) {
+        List<DataBox> keys = new ArrayList<>();
+        keys.add(key); // insert split_key into the new root
+        List<Long> children = new ArrayList<>();
+        children.add(root.getPage().getPageNum()); // left child : original root
+        children.add(child); // right child : new_split node
+        BPlusNode newRoot = new InnerNode(metadata, bufferManager, keys, children, lockContext);
+        updateRoot(newRoot);
+    }
     /**
      * Inserts a (key, rid) pair into a B+ tree. If the key already exists in
      * the B+ tree, then the pair is not inserted and an exception is raised.
@@ -257,6 +267,11 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
+        Optional<Pair<DataBox, Long>> splitInfo = root.put(key, rid);
+        if (splitInfo.isPresent()) {
+            // split the root
+            splitRoot(splitInfo.get().getFirst(), splitInfo.get().getSecond());
+        }
 
         return;
     }
@@ -288,6 +303,17 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
+        if (scanAll().hasNext()) {
+            throw new RuntimeException("buldLoad must be called in an empty tree");
+        }
+        //此处为什么要加一个循环？因为根据叶节点的逻辑，只要出现分裂情况，他就会返回那个分裂节点，然后程序就停了，所以要不断的启动
+        while(data.hasNext()){
+            Optional<Pair<DataBox, Long>> splitInfo = root.bulkLoad(data, fillFactor);
+            if (splitInfo.isPresent()) {
+                // split the root
+                splitRoot(splitInfo.get().getFirst(), splitInfo.get().getSecond());
+            }
+        }
 
         return;
     }
@@ -309,7 +335,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
-
+        root.remove(key);
         return;
     }
 
@@ -423,18 +449,44 @@ public class BPlusTree {
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
         // TODO(proj2): Add whatever fields and constructors you want here.
-
+        //这里的问题是如何实现一个迭代方法：dfs
+        //问题：如何使得不同的叶节点能够相互知道呢？
+        LeafNode currNode;
+        Iterator<RecordId> currIter;
+        public BPlusTreeIterator(LeafNode a){
+            currNode =  a;
+            currIter = a.scanAll();
+        }
+        public BPlusTreeIterator(LeafNode a,DataBox key){
+            currNode =  a;
+            currIter = a.scanGreaterEqual(key);
+        }
         @Override
         public boolean hasNext() {
             // TODO(proj2): implement
-
+            if(currIter.hasNext()){
+                return true;
+            }
+            else if(currNode.getRightSibling().isPresent()){
+                return true;
+            }
             return false;
         }
 
         @Override
         public RecordId next() {
             // TODO(proj2): implement
+            if(currIter.hasNext()){
+                return currIter.next();
+            }
+            while(currNode.getRightSibling().isPresent()){
+                currNode=currNode.getRightSibling().get();
+                currIter = currNode.scanAll();
+                if(currIter.hasNext()){
+                    return  currIter.next();
+                }
 
+            }
             throw new NoSuchElementException();
         }
     }
