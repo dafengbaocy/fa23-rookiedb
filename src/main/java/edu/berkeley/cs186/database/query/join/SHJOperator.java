@@ -147,7 +147,7 @@ public class SHJOperator extends JoinOperator {
      * @return an array of Partitions
      */
     private Partition[] createPartitions() {
-        int usableBuffers = this.numBuffers - 1;
+        int usableBuffers = this.numBuffers - 1;//B-1
         Partition partitions[] = new Partition[usableBuffers];
         for (int i = 0; i < usableBuffers; i++) {
             Schema schema = getLeftSource().getSchema();

@@ -573,10 +573,26 @@ public class QueryPlan {
      * nested within any possible pushed down select operators. Ties for the
      * minimum cost operator can be broken arbitrarily.
      */
+    //是选择全局扫描还是索引扫描
     public QueryOperator minCostSingleAccess(String table) {
         QueryOperator minOp = new SequentialScanOperator(this.transaction, table);
 
+
+
         // TODO(proj3_part2): implement
+        int minCost = minOp.estimateIOCost();
+        int index = -1;
+        for (int i : getEligibleIndexColumns(table)) {
+            SelectPredicate sp = this.selectPredicates.get(i);
+            QueryOperator indexScan = new IndexScanOperator(this.transaction, table, sp.column, sp.operator, sp.value);
+            int cost = indexScan.estimateIOCost();
+            if (cost < minCost) {
+                minCost = cost;
+                minOp = indexScan;
+                index = i;
+            }
+        }
+        minOp = addEligibleSelections(minOp, index);
         return minOp;
     }
 
@@ -592,6 +608,8 @@ public class QueryPlan {
      *
      * @return lowest cost join QueryOperator between the input operators
      */
+
+
     private QueryOperator minCostJoinType(QueryOperator leftOp,
                                           QueryOperator rightOp,
                                           String leftColumn,
@@ -646,6 +664,36 @@ public class QueryPlan {
         //      calculate the cheapest join with the new table (the one you
         //      fetched an operator for from pass1Map) and the previously joined
         //      tables. Then, update the result map if needed.
+        for (Set<String> prevSet : prevMap.keySet()) {
+            for (JoinPredicate jp : this.joinPredicates) {
+                Set<String> newSet = new HashSet<>(prevSet);
+                Set<String> tableSet = new HashSet<>();
+                QueryOperator joinQuery;
+                // Case 1:
+                if (prevSet.contains(jp.leftTable) && !prevSet.contains(jp.rightTable)) {
+                    tableSet.add(jp.rightTable);
+                    QueryOperator rightQuery = pass1Map.get(tableSet);
+                    joinQuery = minCostJoinType(prevMap.get(prevSet), rightQuery, jp.leftColumn, jp.rightColumn);
+                    newSet.add(jp.rightTable);
+                } else if (!prevSet.contains(jp.leftTable) && prevSet.contains(jp.rightTable)) {
+                    // Case 2:
+                    tableSet.add(jp.leftTable);
+                    QueryOperator leftQuery = pass1Map.get(tableSet);
+                    // only consider left-deep join
+                    joinQuery = minCostJoinType(prevMap.get(prevSet), leftQuery, jp.rightColumn, jp.leftColumn);
+                    newSet.add(jp.leftTable);
+                } else {
+                    // Case 3:
+                    continue;
+                }
+                if (result.containsKey(newSet)) {
+                    if (result.get(newSet).estimateIOCost() > joinQuery.estimateIOCost())
+                        result.put(newSet, joinQuery);
+                } else {
+                    result.put(newSet, joinQuery);
+                }
+            }
+        }
         return result;
     }
 
